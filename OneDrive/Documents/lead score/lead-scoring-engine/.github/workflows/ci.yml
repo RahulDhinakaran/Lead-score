@@ -1,0 +1,176 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      COVERAGE_THRESHOLD: '80'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Build wheelhouse
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pip-wheel
+          mkdir -p ./.wheelhouse
+           mkdir -p ./wheelhouse
+          pip wheel --wheel-dir=./.wheelhouse -r requirements.txt || true
+           pip wheel --wheel-dir=./wheelhouse -r requirements.txt || true
+      - name: Cache wheelhouse
+        uses: actions/cache@v4
+        with:
+          path: ./.wheelhouse
+          key: ${{ runner.os }}-wheelhouse-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-wheelhouse-
+           path: ./wheelhouse
+           key: ${{ runner.os }}-wheelhouse-${{ hashFiles('**/requirements.txt') }}
+      - name: Cache virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: ${{ runner.os }}-venv-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-venv-
+      - name: Setup virtualenv and install dependencies from wheelhouse
+        run: |
+          # If cached venv exists, validate its Python matches runner Python; recreate if not
+          if [ -d .venv ]; then
+            VENV_PY=.venv/bin/python
+            if [ -x "$VENV_PY" ]; then
+              VENV_VER=$($VENV_PY -c 'import sys; print("{}.{}".format(*sys.version_info[:2]))')
+            else
+              VENV_VER=""
+            fi
+            RUNNER_VER=$(python -c 'import sys; print("{}.{}".format(*sys.version_info[:2]))')
+            echo "venv python: $VENV_VER runner python: $RUNNER_VER"
+            if [ "$VENV_VER" != "$RUNNER_VER" ]; then
+              echo "Python version mismatch in cached venv; recreating .venv"
+              rm -rf .venv
+            fi
+          fi
+          if [ ! -d .venv ]; then
+            python -m venv .venv
+          fi
+          . .venv/bin/activate
+          pip install --upgrade pip
+          if [ -d ./.wheelhouse ] && [ "$(ls -A ./.wheelhouse)" ]; then
+            .venv/bin/pip install --no-index --find-links=./.wheelhouse -r requirements.txt
+            if [ -d ./wheelhouse ] && [ "$(ls -A ./wheelhouse)" ]; then
+              .venv/bin/pip install --no-index --find-links=./wheelhouse -r requirements.txt
+          else
+            .venv/bin/pip install -r requirements.txt
+          fi
+          # Install coverage tooling (not required in requirements.txt)
+          .venv/bin/pip install pytest-cov coverage
+      - name: Run tests with coverage
+        run: .venv/bin/pytest -q --cov=app --cov-report=xml --cov-fail-under=$COVERAGE_THRESHOLD
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+  retention-tests:
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - mode: count
+            retention: '2'
+            dry_run: 'true'
+          - mode: age
+            retention_age_days: '1'
+            dry_run: 'true'
+          - mode: size
+            max_size_mb: '0'
+            dry_run: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Build wheelhouse
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pip-wheel
+          mkdir -p ./.wheelhouse
+          pip wheel --wheel-dir=./.wheelhouse -r requirements.txt || true
+      - name: Cache wheelhouse
+        uses: actions/cache@v4
+        with:
+          path: ./.wheelhouse
+          key: ${{ runner.os }}-wheelhouse-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-wheelhouse-
+      - name: Cache virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: ${{ runner.os }}-venv-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-venv-
+      - name: Setup virtualenv and install dependencies from wheelhouse
+        run: |
+          # If cached venv exists, validate its Python matches runner Python; recreate if not
+          if [ -d .venv ]; then
+            VENV_PY=.venv/bin/python
+            if [ -x "$VENV_PY" ]; then
+              VENV_VER=$($VENV_PY -c 'import sys; print("{}.{}".format(*sys.version_info[:2]))')
+            else
+              VENV_VER=""
+            fi
+            RUNNER_VER=$(python -c 'import sys; print("{}.{}".format(*sys.version_info[:2]))')
+            echo "venv python: $VENV_VER runner python: $RUNNER_VER"
+            if [ "$VENV_VER" != "$RUNNER_VER" ]; then
+              echo "Python version mismatch in cached venv; recreating .venv"
+              rm -rf .venv
+            fi
+          fi
+          if [ ! -d .venv ]; then
+            python -m venv .venv
+          fi
+          . .venv/bin/activate
+          pip install --upgrade pip
+          if [ -d ./.wheelhouse ] && [ "$(ls -A ./.wheelhouse)" ]; then
+            .venv/bin/pip install --no-index --find-links=./.wheelhouse -r requirements.txt
+            if [ -d ./wheelhouse ] && [ "$(ls -A ./wheelhouse)" ]; then
+              .venv/bin/pip install --no-index --find-links=./wheelhouse -r requirements.txt
+          else
+            .venv/bin/pip install -r requirements.txt
+          fi
+      - name: Run retention tests (matrix)
+        env:
+          MODEL_RETENTION_MODE: ${{ matrix.mode }}
+          MODEL_RETENTION: ${{ matrix.retention }}
+          MODEL_RETENTION_AGE_DAYS: ${{ matrix.retention_age_days }}
+          MODEL_RETENTION_MAX_SIZE_MB: ${{ matrix.max_size_mb }}
+          MODEL_RETENTION_DRY_RUN: ${{ matrix.dry_run }}
+        run: |
+          echo "Running retention mode: $MODEL_RETENTION_MODE"
+          .venv/bin/pytest -q tests/test_retention.py
